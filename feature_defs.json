@@ -1,0 +1,142 @@
+{
+  "bid_ask_spread_proxy": [
+    "ask_qty",
+    "-",
+    "bid_qty"
+  ],
+  "total_liquidity": [
+    "bid_qty",
+    "+",
+    "ask_qty"
+  ],
+  "trade_imbalance": [
+    "buy_qty",
+    "-",
+    "sell_qty"
+  ],
+  "total_trades": [
+    "buy_qty",
+    "+",
+    "sell_qty"
+  ],
+  "volume_per_trade": [
+    "volume",
+    "/",
+    "total_trades"
+  ],
+  "buy_volume_ratio": [
+    "buy_qty",
+    "/",
+    "volume"
+  ],
+  "sell_volume_ratio": [
+    "sell_qty",
+    "/",
+    "volume"
+  ],
+  "buying_pressure": [
+    "buy_qty",
+    "/",
+    "total_trades"
+  ],
+  "selling_pressure": [
+    "sell_qty",
+    "/",
+    "total_trades"
+  ],
+  "order_imbalance": [
+    "bid_qty",
+    "-",
+    "ask_qty"
+  ],
+  "order_imbalance_abs": [
+    "order_imbalance",
+    "*",
+    "order_imbalance"
+  ],
+  "bid_liquidity_ratio": [
+    "bid_qty",
+    "/",
+    "volume"
+  ],
+  "ask_liquidity_ratio": [
+    "ask_qty",
+    "/",
+    "volume"
+  ],
+  "depth_imbalance": [
+    "total_trades",
+    "-",
+    "volume"
+  ],
+  "buy_sell_ratio": [
+    "buy_qty",
+    "/",
+    "sell_qty"
+  ],
+  "bid_ask_ratio": [
+    "bid_qty",
+    "/",
+    "ask_qty"
+  ],
+  "volume_liquidity_ratio": [
+    "volume",
+    "/",
+    "total_liquidity"
+  ],
+  "buy_volume_product": [
+    "buy_qty",
+    "*",
+    "volume"
+  ],
+  "sell_volume_product": [
+    "sell_qty",
+    "*",
+    "volume"
+  ],
+  "bid_ask_product": [
+    "bid_qty",
+    "*",
+    "ask_qty"
+  ],
+  "market_competition": [
+    "buy_qty",
+    "*",
+    "sell_qty"
+  ],
+  "liquidity_competition": [
+    "bid_qty",
+    "*",
+    "ask_qty"
+  ],
+  "market_activity": [
+    "buy_qty",
+    "+",
+    "sell_qty"
+  ],
+  "activity_concentration": [
+    "volume",
+    "/",
+    "market_activity"
+  ],
+  "info_arrival_rate": [
+    "total_trades",
+    "/",
+    "volume"
+  ],
+  "market_making_intensity": [
+    "total_liquidity",
+    "/",
+    "total_trades"
+  ],
+  "effective_spread_proxy": [
+    "trade_imbalance",
+    "/",
+    "volume"
+  ],
+  "order_flow_imbalance_ewm": [
+    "trade_imbalance",
+    "*",
+    0.95
+  ]
+}

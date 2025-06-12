@@ -15,4 +15,5 @@ saved_models*
 avg_val_pear*
 AG_submission*
 NN_submission*
-NNdropoutTra*
+NNdropoutTr*
+xgb_submi*
