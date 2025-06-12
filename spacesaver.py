@@ -2,8 +2,8 @@ import pandas as pd
 import numpy as np
 
 # ─── USER CONFIG ───────────────────────────────────────────────────────────────
-INPUT_FILE  = r"c:\Users\lndnc\Downloads\drw-crypto-market-prediction\train.parquet"
-OUTPUT_FILE = r"C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\train.csv"
+INPUT_FILE  = r"C:\Users\lando\Downloads\drw-crypto-market-prediction\test.parquet"
+OUTPUT_FILE = r"C:\Users\lando\Desktop\AI\DRWcryptochallenge\test.csv"
 # ────────────────────────────────────────────────────────────────────────────────
 
 def reduce_mem_usage(df):

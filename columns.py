@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Define the path to your CSV file
-csv_file_path = r'C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\train.csv' # Make sure this file is in the same directory or provide the full path
+csv_file_path = r'C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\test.csv' # Make sure this file is in the same directory or provide the full path
 
 try:
     # Read the CSV file into a pandas DataFrame

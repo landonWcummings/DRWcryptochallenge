@@ -10,3 +10,9 @@ plots*
 checkpoints*
 study_log*
 dropout_sweep*
+ag_models*
+saved_models*
+avg_val_pear*
+AG_submission*
+NN_submission*
+NNdropoutTra*
