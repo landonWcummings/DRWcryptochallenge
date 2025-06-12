@@ -6,3 +6,7 @@ train*
 transformer*
 __pycach*
 models*
+plots*
+checkpoints*
+study_log*
+dropout_sweep*
