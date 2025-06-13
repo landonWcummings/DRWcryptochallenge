@@ -19,7 +19,7 @@ PHASE1_EPOCHS = 6    # decoder pretrain max epochs
 PATIENCE      = 2    # early stopping patience
 PHASE2_EPOCHS = 10    # transformer training epochs (reduced)
 LR            = 1e-3
-DROPOUT       = 0.3
+DROPOUT       = 0.4
 DEVICE        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # --- Selected features ---
@@ -196,37 +196,30 @@ def train_transformer(lin_dec, res_dec, mean, std):
     while True:
         attempt += 1
         transformer = TransformerPredictor(len(selected_features)).to(DEVICE)
-        opt = optim.Adam(transformer.parameters(), lr=LR)
+        # Use AdamW with weight decay
+        opt = optim.AdamW(transformer.parameters(), lr=LR, weight_decay=1e-4)
         mse, mae_loss = nn.MSELoss(), nn.L1Loss()
-        # Run first epoch only
         transformer.train()
-        # scheduled alpha=0 for first epoch (use true prev)
-        alpha = 0.0
+        # First epoch (alpha=0)
         for Xc, Xp_true, y in train_loader:
             Xc, Xp_true, y = Xc.to(DEVICE), Xp_true.to(DEVICE), y.to(DEVICE)
-            with torch.no_grad(): Xp_dec = (lin_dec(Xc) + res_dec(Xc)) / 2
-            Xp_mix = Xp_true  # alpha=0
-            pred = transformer(Xc, Xp_mix)
+            pred = transformer(Xc, Xp_true)
             loss = mse(pred, y)
             opt.zero_grad(); loss.backward(); opt.step()
-        # Evaluate rand-val on first epoch
+        # Evaluate rand-val
         transformer.eval(); preds, trues = [], []
         with torch.no_grad():
-            for Xc, Xp_true, y in rv_loader:
+            for Xc, _, y in rv_loader:
                 Xc, y = Xc.to(DEVICE), y.to(DEVICE)
                 Xp_dec = (lin_dec(Xc) + res_dec(Xc)) / 2
                 out = transformer(Xc, Xp_dec)
                 preds.append(out.cpu().numpy()); trues.append(y.cpu().numpy())
         r_rand = pearsonr(np.concatenate(trues), np.concatenate(preds))[0]
         logging.info(f"Init attempt {attempt}: first-epoch Rand-val R={r_rand:.4f}")
-        if r_rand > 0.15:
-            logging.info("Good init found, proceeding with full training.")
-            break
-        if attempt >= 12:
-            logging.warning("Max attempts reached, proceeding anyway.")
+        if r_rand > 0.1 or attempt >= 10:
             break
 
-    # Full training over PHASE2_EPOCHS
+    # Full scheduled training
     for ep in range(1, PHASE2_EPOCHS+1):
         alpha = (ep - 1) / (PHASE2_EPOCHS - 1)
         transformer.train(); tr_mse=tr_mae=cnt=0
@@ -237,12 +230,28 @@ def train_transformer(lin_dec, res_dec, mean, std):
             pred = transformer(Xc, Xp_mix)
             loss = mse(pred, y)
             opt.zero_grad(); loss.backward(); opt.step()
-            tr_mse += loss.item()*Xc.size(0)
-            tr_mae += mae_loss(pred, y).item()*Xc.size(0)
-            cnt += Xc.size(0)
-        # Validation logging ... (same as before)
-        # [omitted for brevity]
-        logging.info(f"Ph2 Ep{ep}: alpha={alpha:.2f}, TrMSE={tr_mse/cnt:.4f}, MAE={tr_mae/cnt:.4f}")
+            tr_mse += loss.item()*Xc.size(0); tr_mae += mae_loss(pred, y).item()*Xc.size(0); cnt += Xc.size(0)
+        # Validation
+        transformer.eval()
+        def eval_loader(loader, use_true):
+            ps, ts, total_mae, ns = [], [], 0, 0
+            with torch.no_grad():
+                for Xc, Xp_true, y in loader:
+                    Xc, y = Xc.to(DEVICE), y.to(DEVICE)
+                    Xp_dec = (lin_dec(Xc) + res_dec(Xc)) / 2
+                    Xp_in = Xp_true.to(DEVICE) if use_true else Xp_dec
+                    out = transformer(Xc, Xp_in)
+                    ps.append(out.cpu().numpy()); ts.append(y.cpu().numpy())
+                    total_mae += mae_loss(out, y).item()*Xc.size(0); ns += Xc.size(0)
+            R = pearsonr(np.concatenate(ts), np.concatenate(ps))[0]
+            return R, total_mae/ns
+        r_time, mae_time = eval_loader(tv_loader, True)
+        r_rand, mae_rand = eval_loader(rv_loader, False)
+        logging.info(
+            f"Ph2 Ep{ep}: alpha={alpha:.2f}, TrMSE={tr_mse/cnt:.4f}, MAE={tr_mae/cnt:.4f}, "
+            f"Time-val(R={r_time:.4f}, MAE={mae_time:.4f}), "
+            f"Rand-val(R={r_rand:.4f}, MAE={mae_rand:.4f})"
+        )
 
     return transformer
 
