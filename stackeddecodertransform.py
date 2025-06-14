@@ -16,19 +16,16 @@ TEST_CSV_PATH = r'C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\test.csv'
 TIME_COL      = 'timestamp'
 TARGET_COL    = 'label'
 BATCH_SIZE    = 128
-NUM_EPOCHS    = 10
+NUM_EPOCHS    = 7   # early stopping max epochs
+PATIENCE      = 3   # early stopping patience
 LR            = 1e-3
 DROPOUT       = 0.3
 DEVICE        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-NUM_RUNS      = 7
+NUM_RUNS      = 30
 MODEL_DIR     = 'model_runs'
 BEST_MODEL    = 'best_model.pt'
 PLOT_PATH     = 'validation_runs.png'
-tr_loader = None
-vl_loader = None
 
-
-# Create directories
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 # --- Selected features ---
@@ -275,14 +272,14 @@ def validate(lin_dec, res_dec, refiner, transformer, mse, mae, alpha):
 # --- Training loop for one model ---
 def run_seed(seed):
     torch.manual_seed(seed)
-    df = pd.read_csv(CSV_PATH)
-    df = add_features(df)
+    df = pd.read_csv(CSV_PATH); df = add_features(df)
     df = df[[TIME_COL] + selected_features + [TARGET_COL]]
     cut = int(0.8 * len(df))
-    train_df, val_df = df.iloc[:cut], df.iloc[cut:]
+    train_df, val_df = df.iloc[:cut].copy(), df.iloc[cut:].copy()
     mean = train_df[selected_features].mean(); std = train_df[selected_features].std().replace(0,1)
     train_df.loc[:, selected_features] = (train_df[selected_features] - mean) / std
     val_df.loc[:, selected_features]   = (val_df[selected_features]   - mean) / std
+
     tr_loader = DataLoader(TimeSeriesDataset(train_df), BATCH_SIZE, shuffle=True)
     vl_loader = DataLoader(TimeSeriesDataset(val_df), BATCH_SIZE)
 
@@ -292,45 +289,51 @@ def run_seed(seed):
     opt = optim.Adam(list(refiner.parameters()) + list(transformer.parameters()), lr=LR)
     mse = nn.MSELoss()
 
+    best_val = -np.inf
+    wait = 0
     metrics = []
+
     for epoch in range(1, NUM_EPOCHS+1):
         alpha = (epoch-1)/(NUM_EPOCHS-1)
+        # training
         refiner.train(); transformer.train()
-        train_loss = val_loss = cnt = 0
-        tr_preds, tr_trues = [], []
         for Xc, Xp, y in tr_loader:
             Xc, Xp, y = Xc.to(DEVICE), Xp.to(DEVICE), y.to(DEVICE)
-            pf = (lin_dec(Xc) + res_dec(Xc)) / 2
+            pf = (lin_dec(Xc)+res_dec(Xc))/2
             pf_ref = refiner(pf)
             pred = transformer(Xc, pf_ref)
             loss = mse(pf_ref, Xp) + mse(pred, y)
             opt.zero_grad(); loss.backward(); opt.step()
-            tr_preds.append(pred.detach().cpu().numpy()); tr_trues.append(y.cpu().numpy())
-            cnt += Xc.size(0)
-            train_loss += mse(pred, y).item() * Xc.size(0)
-        tr_r = pearsonr(np.concatenate(tr_trues), np.concatenate(tr_preds))[0]
-        tr_mse = train_loss/cnt
 
-        refiner.eval(); transformer.eval()
-        val_preds, val_trues = [], []
-        cnt = val_loss = 0
+        # validation
+        transformer.eval(); refiner.eval()
+        preds, trues = [], []
         with torch.no_grad():
             for Xc, Xp, y in vl_loader:
                 Xc, Xp, y = Xc.to(DEVICE), Xp.to(DEVICE), y.to(DEVICE)
-                pf = (lin_dec(Xc) + res_dec(Xc)) / 2
+                pf = (lin_dec(Xc)+res_dec(Xc))/2
                 pf_ref = refiner(pf)
                 pred = transformer(Xc, pf_ref)
-                val_preds.append(pred.cpu().numpy()); val_trues.append(y.cpu().numpy())
-                cnt += Xc.size(0)
-                val_loss += mse(pred, y).item() * Xc.size(0)
-        v_r = pearsonr(np.concatenate(val_trues), np.concatenate(val_preds))[0]
-        v_mse = val_loss/cnt
-        metrics.append((tr_mse, tr_r, v_mse, v_r))
-        logging.info(f"Seed {seed} Ep{epoch}: TrainMSE={tr_mse:.4f}, R={tr_r:.4f} | ValMSE={v_mse:.4f}, R={v_r:.4f}")
+                preds.append(pred.cpu().numpy()); trues.append(y.cpu().numpy())
+        val_r = pearsonr(np.concatenate(trues), np.concatenate(preds))[0]
+        metrics.append(val_r)
+        logging.info(f"Seed {seed} Ep{epoch}: Val R={val_r:.4f}")
 
-    # Save run
+        # early stopping
+        if val_r > best_val:
+            best_val = val_r; best_state = {
+                'ref': refiner.state_dict(), 'tr': transformer.state_dict(), 'seed': seed
+            }
+            wait = 0
+        else:
+            wait += 1
+            if wait >= PATIENCE:
+                logging.info(f"Seed {seed}: early stopping at epoch {epoch}")
+                break
+
+    # save best for this seed
     path = os.path.join(MODEL_DIR, f'run_{seed}.pt')
-    torch.save({'state_ref': refiner.state_dict(), 'state_tr': transformer.state_dict(), 'metrics': metrics}, path)
+    torch.save(best_state, path)
     return metrics
 
 # --- Main ---
