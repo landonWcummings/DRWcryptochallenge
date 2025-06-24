@@ -16,7 +16,7 @@ import optuna
 from optuna.pruners import MedianPruner
 
 # import user utilities
-from base_utils import RollingWindowDataset, clean_and_scale, apply_pca
+from DRWkaggle.transformer_files.base_utils import RollingWindowDataset, clean_and_scale, apply_pca
 
 # --------------------------------------------------------------------------
 #  Configuration (no command-line inputs)

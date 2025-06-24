@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from scipy.stats import pearsonr
 
-from base_utils import (
+from DRWkaggle.transformer_files.base_utils import (
     load_and_split_random,
     clean_and_scale,
     apply_pca

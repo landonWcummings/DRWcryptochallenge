@@ -29,7 +29,7 @@ class Config:
     N_FOLDS = 3
     RANDOM_STATE = 42
     NN_BATCH = 512
-    NN_EPOCHS = 5
+    NN_EPOCHS = 4
     NN_PATIENCE = 1
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
