@@ -45,9 +45,9 @@ def feature_engineering(df):
 
 # ===== Configuration =====
 class Config:
-    TRAIN_PATH = r"C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\train.csv"
-    TEST_PATH = r"C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\test.csv"
-    SUBMISSION_PATH = r"C:\Users\lndnc\OneDrive\Desktop\AI\DRWkaggle\submission11.99.csv"
+    TRAIN_PATH = r"C:\Users\lando\Desktop\AI\DRWcryptochallenge\train.csv"
+    TEST_PATH = r"C:\Users\lando\Desktop\AI\DRWcryptochallenge\test.csv"
+    SUBMISSION_PATH = r"C:\Users\lando\Desktop\AI\DRWcryptochallenge\submission.csv"
     
     # Original features plus additional market features
     FEATURES = [
