@@ -41,7 +41,7 @@ class Config:
     ]
 
     LABEL_COLUMN = "label"
-    N_FOLDS = 9
+    N_FOLDS = 3
     RANDOM_STATE = 42
 
 XGB_PARAMS = {
