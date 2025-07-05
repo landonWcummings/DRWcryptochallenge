@@ -24,6 +24,8 @@ def create_config():
         N_FOLDS = 3
         EARLY_PERCENTAGE = 0.35
         DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        BATCH_SIZE = 512
+
     return C()
 Config = create_config()
 
@@ -44,14 +46,18 @@ XGB_PARAMS = {
     'random_state':Config.RANDOM_STATE
 }
 
-# NN settings
-NN_TARGETS = ['X345','X888','X862','X302','X532','X344','X385','X856','X178']
+# Define 7 diverse architectures
 ARCHITECTURES = [
-    {"name":"arch_small","embed_dim":256,"layers":[256,128]},
-    {"name":"arch_large","embed_dim":512,"layers":[512,512,256]}
+    {"name":"arch_small","embed_dim":128,"layers":[128,128,64]},
+    {"name":"arch_large","embed_dim":512,"layers":[512,256,128]},
+    {"name":"arch_wide","embed_dim":1024,"layers":[1024,512,256,128]},
+    {"name":"arch_deep","embed_dim":256,"layers":[256,128,64,32,16]},
+    {"name":"arch_narrow","embed_dim":64,"layers":[64,32]},
+    {"name":"arch_flipped","embed_dim":128,"layers":[64,128,64]},
+    {"name":"arch_expanded","embed_dim":512,"layers":[256,512,256]},
 ]
 EPOCH_LIST = list(range(3,32,1))
-PATIENCE_HIGH = 3
+PATIENCE_HIGH = 2
 
 # Feature engineering & load
 def feature_engineering(df):
@@ -68,6 +74,8 @@ def load_data():
     return feature_engineering(tr), feature_engineering(te), sub
 
 # NN builder
+NN_TARGETS = ['X345','X888','X862','X302','X532','X344','X385','X856','X178']
+
 def make_predictor(in_dim, arch):
     class Predictor(nn.Module):
         def __init__(self):
@@ -82,132 +90,127 @@ def make_predictor(in_dim, arch):
         def forward(self, x):
             z = self.embed(x)
             h = self.mlp(z)
-            return self.head(h)
+            return z, self.head(h)
     return Predictor().to(Config.DEVICE)
 
-# Train NN and augment (only add NN_TARGETS preds)
+# Helper for batched inference to avoid OOM
+def batch_predict(model, data_np):
+    model.eval()
+    data = torch.tensor(data_np, dtype=torch.float32).to(Config.DEVICE)
+    all_emb, all_pred = [], []
+    with torch.no_grad():
+        for i in range(0, len(data), Config.BATCH_SIZE):
+            xb = data[i:i+Config.BATCH_SIZE]
+            emb, pred = model(xb)
+            all_emb.append(emb.cpu()); all_pred.append(pred.cpu())
+    return np.vstack([e.numpy() for e in all_emb]), np.vstack([p.numpy() for p in all_pred])
+
+# Train NN and integrate
 def train_and_integrate(train_df, test_df, arch, epochs):
     feats = BASE_FEATURES.copy()
     df = train_df.copy()
     df_shift = df[NN_TARGETS].shift(1).dropna().reset_index(drop=True)
     X = df.loc[1:, feats].values; y = df_shift.values
-    loader = DataLoader(
-        TensorDataset(
-            torch.tensor(X, dtype=torch.float32),
-            torch.tensor(y, dtype=torch.float32)
-        ), batch_size=512, shuffle=True
-    )
+    loader = DataLoader(TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)), batch_size=Config.BATCH_SIZE, shuffle=True)
     model = make_predictor(len(feats), arch)
     opt = torch.optim.Adam(model.parameters(), lr=5e-4)
-    best_state=None; best_loss=float('inf'); stall=0
+    best_state, best_loss, stall = None, float('inf'), 0
     for ep in range(1, epochs+1):
         model.train(); total=0
         for xb,yb in loader:
-            xb,yb=xb.to(Config.DEVICE), yb.to(Config.DEVICE)
-            pred = model(xb)
-            loss = ((pred-yb)**2).mean().sqrt().sum()
-            opt.zero_grad(); loss.backward(); opt.step(); total+=loss.item()
-        avg = total/len(loader)
-        if avg < best_loss:
-            best_loss, stall, best_state = avg, 0, model.state_dict()
-        else:
-            stall += 1
+            xb,yb = xb.to(Config.DEVICE), yb.to(Config.DEVICE)
+            _, pred = model(xb)
+            loss = ((pred - yb)**2).mean().sqrt().sum()
+            opt.zero_grad(); loss.backward(); opt.step(); total += loss.item()
+        avg = total / len(loader)
+        if avg < best_loss: best_loss, stall, best_state = avg, 0, model.state_dict()
+        else: stall += 1
         if stall > 1: break
     model.load_state_dict(best_state)
 
-    with torch.no_grad():
-        Xtr = torch.tensor(train_df[feats].values, dtype=torch.float32).to(Config.DEVICE)
-        pred_tr = model(Xtr)
-        Xte = torch.tensor(test_df[feats].values, dtype=torch.float32).to(Config.DEVICE)
-        pred_te = model(Xte)
+    # Batch inference for train and test
+    emb_tr_np, pred_tr_np = batch_predict(model, train_df[feats].values)
+    emb_te_np, pred_te_np = batch_predict(model, test_df[feats].values)
 
     out_tr = train_df.copy(); out_te = test_df.copy()
     for i, t in enumerate(NN_TARGETS):
-        arr = pred_tr.cpu().numpy()[:, i]
-        shifted = np.concatenate(([np.nan], arr[:-1]))
-        out_tr[f"nnp_{t}"] = pd.Series(shifted, index=out_tr.index)
-        out_te[f"nnp_{t}"] = pd.Series(pred_te.cpu().numpy()[:, i], index=out_te.index)
-
-    new_feats = feats + [f"nnp_{t}" for t in NN_TARGETS]
+        shifted = np.concatenate(([np.nan], pred_tr_np[:-1, i]))
+        out_tr[f"nnp_{t}"] = shifted
+        out_te[f"nnp_{t}"] = pred_te_np[:, i]
+    emb_tr_df = pd.DataFrame(emb_tr_np, columns=[f"nne_{d}" for d in range(emb_tr_np.shape[1])])
+    emb_te_df = pd.DataFrame(emb_te_np, columns=[f"nne_{d}" for d in range(emb_te_np.shape[1])])
+    out_tr = pd.concat([out_tr, emb_tr_df], axis=1)
+    out_te = pd.concat([out_te, emb_te_df], axis=1)
+    new_feats = feats + list(emb_tr_df.columns) + [f"nnp_{t}" for t in NN_TARGETS]
     return out_tr, out_te, new_feats
 
 # XGB train/eval
+LEARNERS = [{"name":"xgb","Estimator":XGBRegressor,"params":XGB_PARAMS}]
 def train_and_evaluate(train_df,test_df,features):
     n=len(train_df); wk=Config.EARLY_PERCENTAGE
-    slices=[('full',0),('75pct',int(0.25*n)),('50pct',int(0.5*n)),('early',int(wk*n))]
-    oof={}; test_preds={}
-    for name,_ in [('xgb',None)]:
-        oof[name]={s[0]:np.zeros(n) for s in slices}
-        test_preds[name]={s[0]:np.zeros(len(test_df)) for s in slices}
-    weights=np.arange(n)/(n-1); sw=(0.9**(1-weights))*n/np.sum(0.9**(1-weights))
+    slices = [('full',0),('75pct',int(0.25*n)),('50pct',int(0.5*n)),('early',int(wk*n))]
+    oof = { 'xgb': {s[0]:np.zeros(n) for s in slices} }
+    test_preds = { 'xgb': {s[0]:np.zeros(len(test_df)) for s in slices} }
+    weights = np.arange(n)/(n-1)
+    sw = (0.9**(1-weights))*n/np.sum(0.9**(1-weights))
     kf=KFold(n_splits=Config.N_FOLDS,shuffle=False)
     for fold,(tr,val) in enumerate(kf.split(train_df),1):
-        Xv=train_df.iloc[val][features].values; yv=train_df.iloc[val][Config.LABEL_COLUMN].values
+        Xv = train_df.iloc[val][features].values; yv = train_df.iloc[val][Config.LABEL_COLUMN].values
         for slice_name,cut in slices:
             if slice_name=='full': tr_idx=tr; swt=sw[tr]
             elif slice_name=='early': mask=tr<cut; tr_idx=tr[mask]; swt=sw[tr_idx]
             else: mask=tr>=cut; tr_idx=tr[mask]; swt=sw[tr_idx] if cut>0 else sw[tr]
             if len(tr_idx)==0: continue
-            Xt=train_df.iloc[tr_idx][features].values; yt=train_df.iloc[tr_idx][Config.LABEL_COLUMN].values
+            Xt = train_df.iloc[tr_idx][features].values; yt = train_df.iloc[tr_idx][Config.LABEL_COLUMN].values
             model=XGBRegressor(**XGB_PARAMS)
-            model.fit(Xt, yt, sample_weight=swt, eval_set=[(Xv, yv)], verbose=False)
-            preds = model.predict(Xv)
-            oof['xgb'][slice_name][val]=preds
-            test_preds['xgb'][slice_name]+=model.predict(test_df[features].values)
-    for sl in test_preds['xgb']: test_preds['xgb'][sl]/=Config.N_FOLDS
+            model.fit(Xt,yt,sample_weight=swt,eval_set=[(Xv,yv)],verbose=False)
+            oof['xgb'][slice_name][val] = model.predict(Xv)
+            test_preds['xgb'][slice_name] += model.predict(test_df[features].values)
+    for sl in test_preds['xgb']: test_preds['xgb'][sl] /= Config.N_FOLDS
     return oof, test_preds
 
-# Search & select best per architecture
-def search_best():
-    train_df,test_df,sub=load_data()
-    best_per_arch = {}
+# Search top-K architectures
+def search_best(top_k=4):
+    train_df,test_df,_ = load_data()
+    results=[]
     for arch in ARCHITECTURES:
-        arch_best=-np.inf; stall=0; best_epoch=None; best_feats=None
+        arch_best=-np.inf; best_ep=None; best_feats=None
         for ep in EPOCH_LIST:
             print(f"Testing {arch['name']} epochs={ep}")
             df_tr,df_te,feats = train_and_integrate(train_df,test_df,arch,ep)
             oof,_ = train_and_evaluate(df_tr,df_te,feats)
             blended = np.mean(list(oof['xgb'].values()),axis=0)
-            score = pearsonr(df_tr[Config.LABEL_COLUMN], blended)[0]
-            print(f" Score for {arch['name']} epoch {ep}: {score:.4f}")
+            score = pearsonr(df_tr[Config.LABEL_COLUMN],blended)[0]
             if score>arch_best:
-                arch_best, stall = score, 0
-                best_epoch, best_feats = ep, feats
+                arch_best, best_ep, best_feats = score, ep, feats
+                stall=0
             else:
-                stall += 1
+                stall+=1
             if stall>=PATIENCE_HIGH: break
-        best_per_arch[arch['name']] = (arch, best_epoch, best_feats)
-        print(f"Best for {arch['name']} @ epochs={best_epoch} score={arch_best:.4f}")
-    return best_per_arch
+        results.append((arch, best_ep, best_feats, arch_best))
+    # pick top-k
+    top_configs = sorted(results, key=lambda x: x[3], reverse=True)[:top_k]
+    print("Top configurations:")
+    for a, e, _, s in top_configs:
+        print(f" {a['name']} @ epochs={e} score={s:.4f}")
+    return top_configs
 
-# Final full train
+# Final full train & predict using top-4
 
 def final_predict():
     train_df,test_df,sub = load_data()
-    bests = search_best()
-    preds = {}
-    for name,(arch,ep,feats) in bests.items():
-        df_tr,df_te,_ = train_and_integrate(train_df,test_df,arch,ep)
-        _, test_preds = train_and_evaluate(df_tr,df_te,feats)
-        preds[name] = np.mean(list(test_preds['xgb'].values()),axis=0)
-        print(f"Collected test predictions for {name} (epoch {ep})")
-
-    # average small & large
-    blended_test = (preds['arch_small'] + preds['arch_large']) / 2
-    sub['prediction'] = blended_test
-
-    # final XGB importances on concatenated df_tr of large
-    arch,ep,feats = bests['arch_large']
-    df_tr,_ ,_ = train_and_integrate(train_df,test_df,arch,ep)
-    final_xgb = XGBRegressor(**XGB_PARAMS)
-    final_xgb.fit(df_tr[feats].values, df_tr[Config.LABEL_COLUMN].values)
-    feat_imp = sorted(zip(feats, final_xgb.feature_importances_), key=lambda x: x[1], reverse=True)
-    print("XGB Feature Importances:")
-    for feat,imp in feat_imp:
-        print(f"{feat}: {imp:.4f}")
-
-    sub.to_csv(Config.SUBMISSION_PATH, index=False)
-    print(f"Saved predictions to {Config.SUBMISSION_PATH}")
+    best_configs = search_best(top_k=4)
+    all_blends = []
+    for arch, ep, feats, _ in best_configs:
+        df_tr,df_te,feats2 = train_and_integrate(train_df,test_df,arch,ep)
+        _, test_preds = train_and_evaluate(df_tr,df_te,feats2)
+        blend = np.mean(list(test_preds['xgb'].values()),axis=0)
+        all_blends.append(blend)
+    # average across top-4
+    final_pred = np.mean(all_blends, axis=0)
+    sub['prediction'] = final_pred
+    sub.to_csv(Config.SUBMISSION_PATH,index=False)
+    print(f"Saved averaged predictions of top-4 architectures to {Config.SUBMISSION_PATH}")
 
 if __name__=='__main__':
     logging.basicConfig(level=logging.INFO)
